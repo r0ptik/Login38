@@ -1,5 +1,7 @@
 # Changelog
 
+*English · [繁體中文](CHANGELOG.zh-TW.md)*
+
 ## 1.2.0
 
 The hunt no longer runs on servers that never offered it.
