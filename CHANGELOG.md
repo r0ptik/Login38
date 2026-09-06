@@ -4,45 +4,47 @@
 
 ## 1.2.0
 
-The hunt no longer runs on servers that never offered it.
+Automatic hunting no longer runs on servers that never offered it.
 
-### A client that had to be clicked once per step
+### One click per step, one click per swing
 
-Players reported that walking and attacking stopped being continuous: the character took
-one step, or one swing, per press of the left mouse button. It happened on servers whose
-operator had ticked "開啟自動狩獵" in the encoder, and it happened whether or not the
-player had switched hunting on.
+Walking and attacking stopped being continuous. It happened on any server whose operator
+ticked automatic hunting in the encoder, whether or not the player had turned hunting on.
 
-The operator's switch was only ever enforced where the settings window writes its copy
-back, so it decided which tab was drawn and nothing else. The helper loop read the
-character's saved profile straight, so a profile holding the hunt switch on was hunted with
-regardless — and a hunt nobody had asked for was pinning the client's hover target and
-clearing its walk and attack flags underneath a player who was playing for themselves.
+The operator's switch only ever reached the settings window, so it decided which tab was
+drawn and nothing else. The helper loop read the character's saved profile instead, and
+hunted with whatever it found there. A hunt nobody had asked for was steering the client
+while the player was trying to play it.
 
-The switch is now read by the loop before it will touch the client at all, and it defaults
-to off: a game whose offer was never read is a game the hunt leaves alone.
+The loop reads the switch now, and it defaults to off.
 
-### The hunt no longer clears flags it did not set
+### The hunt stops clearing flags it did not set
 
-Tearing the chain down wrote the client's walk and attack flags whether or not this hunt
-had armed anything, and it ran on every pass — five times a second while the hunt was
-switched off. The walk engine returns the moment its flag is clear, which is the same
-character taking one step per click. Only what the hunt actually armed is taken back out
-now.
+Tearing the chain down wrote the client's walk and attack flags whether or not the hunt had
+started anything, five times a second while it was switched off. The walk engine stops the
+moment that flag is clear. It now takes back out only what it put in.
+
+### Hunting knows what a teleport is
+
+Cave mouths and other exits are read out of the client's collision grid, and the hunt will
+not route onto one or park beside it. Walking into one used to drop the character on
+another floor still carrying a route, an ignore list and a collision window belonging to
+the map it had left. Changing floor now starts the hunt over.
+
+Only the launcher's own copy of the grid is marked, so the player can still walk wherever
+they like.
 
 ### Low-CPU throttling asked the wrong question
 
-It compared the foreground window against a handle. This client keeps more than one
-top-level window, so the handle found at install time is often not the one holding the
-focus, and the throttle then read a client being played as one sitting in the background.
-It asks which process owns the window in front instead, which is the question the rest of
-the launcher already asked.
+It compared the foreground window by handle. The client keeps more than one top-level
+window, so the throttle regularly read a client being played as one sitting in the
+background. It asks which process owns the window in front now.
 
 ### Packet logging removed
 
-The diagnostic that recorded every packet the client sent is gone, along with its box in
-the helper window. It hooked the client's own network path, which is not something to ship
-to players for a tool only ever used to work out what one build sends.
+The diagnostic that recorded every packet the client sent is gone, with its box in the
+helper window. It hooked the client's own network path, which is not something to ship to
+players.
 
 ## 1.1.0
 
