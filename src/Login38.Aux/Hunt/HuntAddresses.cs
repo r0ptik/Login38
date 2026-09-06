@@ -461,6 +461,31 @@ internal static class HuntAddresses
     internal const ushort GridBlocked = 1;
 
     /// <summary>
+    /// The bit that means the client will send the character somewhere else from here.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Measured rather than guessed. Over a whole loaded window of a cave floor the attribute
+    /// word takes four values and no more — 0x0000, 0x0001, 0x0008 and 0x0009 — except for a
+    /// single cell carrying 0x000B, and that cell is the cave mouth. Its map descriptor agrees:
+    /// <c>map8.map</c> holds one link, <c>to28</c>, at the same square.
+    /// </para>
+    /// <para>
+    /// One cell in thirty-three thousand, which is what makes it worth trusting. A bit that
+    /// meant something ordinary would be on thousands of them.
+    /// </para>
+    /// </remarks>
+    internal const ushort GridTeleport = 0x0002;
+
+    /// <summary>How far from a teleport the hunt refuses to walk, in tiles.</summary>
+    /// <remarks>
+    /// One. The square itself already refuses a step, so this is about not standing beside it:
+    /// a character parked on the cave mouth is a character one server-side nudge away from
+    /// another floor, and a hunt set going on one floor should stay on it.
+    /// </remarks>
+    internal const int TeleportClearance = 1;
+
+    /// <summary>
     /// A bit the launcher writes into its own copy of the grid, meaning a creature is there.
     /// </summary>
     /// <remarks>

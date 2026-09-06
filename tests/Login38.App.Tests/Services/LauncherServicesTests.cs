@@ -194,7 +194,7 @@ public sealed class LauncherServicesTests
             [
                 "announcement", "profile", "toggles", "potions", "escape", "relocate", "timers",
                 "inventory", "spells", "shout", "hotkeys", "helper keys", "delete", "buffs",
-                "status", "experience", "monster-colours", "packet-log", "notifications",
+                "status", "experience", "monster-colours", "notifications",
                 "overlay", "hunt",
             ]);
     }

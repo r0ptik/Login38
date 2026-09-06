@@ -194,6 +194,16 @@ public sealed class ShellcodeBuilder
     /// <summary><c>pop eax</c>.</summary>
     public ShellcodeBuilder PopEax() => Byte(0x58);
 
+    /// <summary><c>push esp</c> — the address of whatever was pushed last.</summary>
+    /// <remarks>
+    /// From the 386 onwards this pushes the value <c>esp</c> held before the instruction
+    /// ran, so a <c>push</c> of a placeholder followed by this one leaves the placeholder's
+    /// own address on the stack. That is how a detour hands an API an out parameter without
+    /// allocating anywhere to put it — and, unlike a fixed slot, without two threads inside
+    /// the same detour overwriting each other's answer.
+    /// </remarks>
+    public ShellcodeBuilder PushEsp() => Byte(0x54);
+
     /// <summary><c>pop esi</c>.</summary>
     public ShellcodeBuilder PopEsi() => Byte(0x5E);
 

@@ -18,48 +18,60 @@ public sealed class LowCpuDetourTests
 {
     private static readonly GameAddress Cave = new(0x10000000);
     private static readonly GameAddress Peek = new(0x75100000);
-    private static readonly nint Window = unchecked((nint)0xABCDEF01);
+    private static readonly uint ProcessId = 0x1234;
 
     /// <summary>What <c>PeekMessageA</c> actually starts with on this build of Windows.</summary>
     /// <remarks><c>mov edi, edi; push ebp; mov ebp, esp</c> — the hot-patch prologue.</remarks>
     private static readonly byte[] Prologue = [0x8B, 0xFF, 0x55, 0x8B, 0xEC];
 
     private static readonly LowCpuApi Api = new(
-        Peek, new GameAddress(0x75ABCDEF), new GameAddress(0x75EEFF00), new GameAddress(0x75DDEEFF));
+        Peek,
+        new GameAddress(0x75ABCDEF),
+        new GameAddress(0x75EEFF00),
+        new GameAddress(0x75DDEEFF),
+        new GameAddress(0x75CCBBAA));
 
     /// <summary>
-    /// The reference's own detour, transcribed instruction by instruction.
+    /// Every byte of the cave, written out by hand rather than produced by the builder.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Written out from the Rust source rather than produced by anything the port shares,
-    /// so agreeing with it means the port encodes the same instructions and resolves the
-    /// same branches.
+    /// Started as the reference's own detour transcribed instruction by instruction, and
+    /// still is one everywhere except the foreground test. The reference compared
+    /// <c>GetForegroundWindow</c> against a window handle; this asks
+    /// <c>GetWindowThreadProcessId</c> who owns that window and compares the process, which
+    /// is the question <c>GameWindow.IsForeground</c> asks and for the same reason — the
+    /// client keeps more than one top-level window. Comparing handles throttled clients
+    /// that were being played.
     /// </para>
     /// <para>
-    /// One difference, and it is the layout rather than the code: the reference padded the
-    /// detour with ten <c>nop</c>s to put the trampoline at a hand-chosen <c>0x60</c>, and
-    /// checked the detour still fitted with a <c>debug_assert!</c> that release builds
-    /// drop. Here the trampoline follows the detour wherever it ends, so it cannot be
-    /// outgrown. Everything before that point, and the order of the four slots after it,
-    /// is the reference's.
+    /// The layout differs from the reference too: it padded the detour with ten
+    /// <c>nop</c>s to put the trampoline at a hand-chosen <c>0x60</c> and checked it still
+    /// fitted with a <c>debug_assert!</c> that release builds drop, where here the
+    /// trampoline follows the detour wherever it ends and cannot be outgrown.
+    /// </para>
+    /// <para>
+    /// Kept as a whole-cave comparison because this runs on the game's message thread
+    /// thousands of times a second: a wrong byte here is not a feature that does not work,
+    /// it is a client that stops responding.
     /// </para>
     /// </remarks>
     private static ReadOnlySpan<byte> Reference =>
     [
         0xFF, 0x74, 0x24, 0x14, 0xFF, 0x74, 0x24, 0x14, 0xFF, 0x74, 0x24, 0x14,
-        0xFF, 0x74, 0x24, 0x14, 0xFF, 0x74, 0x24, 0x14, 0xE8, 0x3D, 0x00, 0x00,
-        0x00, 0x85, 0xC0, 0x75, 0x36, 0xFF, 0x15, 0x60, 0x00, 0x00, 0x10, 0x3B,
-        0x05, 0x68, 0x00, 0x00, 0x10, 0x74, 0x26, 0x53, 0x31, 0xDB, 0x43, 0x53,
-        0xFF, 0x15, 0x6C, 0x00, 0x00, 0x10, 0x66, 0xA9, 0x00, 0x80, 0x75, 0x14,
-        0x43, 0x81, 0xFB, 0xFF, 0x00, 0x00, 0x00, 0x7C, 0xEA, 0x5B, 0x6A, 0x32,
-        0xFF, 0x15, 0x64, 0x00, 0x00, 0x10, 0xEB, 0x01, 0x5B, 0x33, 0xC0, 0xC2,
-        0x14, 0x00, 0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0xE9, 0xA5, 0xFF, 0x0F, 0x65,
-        0xEF, 0xCD, 0xAB, 0x75, 0xFF, 0xEE, 0xDD, 0x75, 0x01, 0xEF, 0xCD, 0xAB,
-        0x00, 0xFF, 0xEE, 0x75,
+        0xFF, 0x74, 0x24, 0x14, 0xFF, 0x74, 0x24, 0x14, 0xE8, 0x48, 0x00, 0x00,
+        0x00, 0x85, 0xC0, 0x75, 0x41, 0xFF, 0x15, 0x6B, 0x00, 0x00, 0x10, 0x6A,
+        0x00, 0x54, 0x50, 0xFF, 0x15, 0x7B, 0x00, 0x00, 0x10, 0x58, 0x3B, 0x05,
+        0x73, 0x00, 0x00, 0x10, 0x74, 0x26, 0x53, 0x31, 0xDB, 0x43, 0x53, 0xFF,
+        0x15, 0x77, 0x00, 0x00, 0x10, 0x66, 0xA9, 0x00, 0x80, 0x75, 0x14, 0x43,
+        0x81, 0xFB, 0xFF, 0x00, 0x00, 0x00, 0x7C, 0xEA, 0x5B, 0x6A, 0x32, 0xFF,
+        0x15, 0x6F, 0x00, 0x00, 0x10, 0xEB, 0x01, 0x5B, 0x33, 0xC0, 0xC2, 0x14,
+        0x00, 0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0xE9, 0x9A, 0xFF, 0x0F, 0x65, 0xEF,
+        0xCD, 0xAB, 0x75, 0xFF, 0xEE, 0xDD, 0x75, 0x34, 0x12, 0x00, 0x00, 0x00,
+        0xFF, 0xEE, 0x75, 0xAA, 0xBB, 0xCC, 0x75,
     ];
 
-    private static byte[] Build() => LowCpuDetour.Build(Cave, Api, Window, Prologue);
+    private static byte[] Build() => LowCpuDetour.Build(Cave, Api, ProcessId, Prologue);
 
     private static LowCpuLayout Layout() => LowCpuDetour.LayoutFor(Cave, Prologue.Length);
 
@@ -127,10 +139,39 @@ public sealed class LowCpuDetourTests
     {
         var code = Build();
 
-        code[41].ShouldBe((byte)0x74);
+        code[52].ShouldBe((byte)0x74);
 
-        var landing = 43 + (sbyte)code[42];
+        var landing = 54 + (sbyte)code[53];
         code[landing..(landing + 2)].ShouldBe(new byte[] { 0x33, 0xC0 });
+    }
+
+    // The defect this replaced: the client keeps more than one top-level window, so the
+    // handle the launcher had found was regularly not the one holding the focus, and
+    // comparing handles read a client the player was playing as one in the background.
+    // Throttled between clicks, it walked one step and swung once per press.
+    //
+    // GetWindowThreadProcessId writes through a pointer, and the pointer is into the stack
+    // — push a zero, then push the address of it — so two threads in here at once cannot
+    // overwrite each other's answer, and a call that fails leaves the zero no process has.
+    [Fact]
+    public void AsksWhoOwnsTheWindowInFrontRatherThanWhichWindowItIs()
+    {
+        var code = Build();
+        var layout = Layout();
+
+        code[29..31].ShouldBe(new byte[] { 0xFF, 0x15 });
+        BitConverter.ToUInt32(code, 31).ShouldBe(layout.ForegroundWindowSlot.Value);
+
+        // push 0; push esp; push eax — the out parameter, its address, and the window.
+        code[35..39].ShouldBe(new byte[] { 0x6A, 0x00, 0x54, 0x50 });
+
+        code[39..41].ShouldBe(new byte[] { 0xFF, 0x15 });
+        BitConverter.ToUInt32(code, 41).ShouldBe(layout.WindowThreadProcessIdSlot.Value);
+
+        // pop eax; cmp eax, [the game's own process id].
+        code[45].ShouldBe((byte)0x58);
+        code[46..48].ShouldBe(new byte[] { 0x3B, 0x05 });
+        BitConverter.ToUInt32(code, 48).ShouldBe(layout.ProcessIdSlot.Value);
     }
 
     // The helper's own macros drive the client while it is in the background, so a held
@@ -141,13 +182,13 @@ public sealed class LowCpuDetourTests
         var code = Build();
 
         // xor ebx, ebx; inc ebx — the first key asked about.
-        code[44..47].ShouldBe(new byte[] { 0x31, 0xDB, 0x43 });
+        code[55..58].ShouldBe(new byte[] { 0x31, 0xDB, 0x43 });
         LowCpuDetour.FirstVirtualKey.ShouldBe((byte)1);
 
         // cmp ebx, 0xFF; jl — one past the last, because 0xFF is not a key.
-        code[61..67].ShouldBe(new byte[] { 0x81, 0xFB, 0xFF, 0x00, 0x00, 0x00 });
-        code[67].ShouldBe((byte)0x7C);
-        (69 + (sbyte)code[68]).ShouldBe(47);
+        code[72..78].ShouldBe(new byte[] { 0x81, 0xFB, 0xFF, 0x00, 0x00, 0x00 });
+        code[78].ShouldBe((byte)0x7C);
+        (80 + (sbyte)code[79]).ShouldBe(58);
     }
 
     // ebx is the caller's to keep, and this runs on the game's message thread. Every way
@@ -157,15 +198,15 @@ public sealed class LowCpuDetourTests
     {
         var code = Build();
 
-        code[43].ShouldBe((byte)0x53);
+        code[54].ShouldBe((byte)0x53);
 
         // Found a key down: pop, then straight to the shared exit.
-        code[58].ShouldBe((byte)0x75);
-        (60 + (sbyte)code[59]).ShouldBe(80);
-        code[80].ShouldBe((byte)0x5B);
+        code[69].ShouldBe((byte)0x75);
+        (71 + (sbyte)code[70]).ShouldBe(91);
+        code[91].ShouldBe((byte)0x5B);
 
         // Ran out of keys: pop before the sleep.
-        code[69].ShouldBe((byte)0x5B);
+        code[80].ShouldBe((byte)0x5B);
     }
 
     [Fact]
@@ -173,7 +214,7 @@ public sealed class LowCpuDetourTests
     {
         var code = Build();
 
-        code[70..72].ShouldBe(new byte[] { 0x6A, LowCpuDetour.SleepMilliseconds });
+        code[81..83].ShouldBe(new byte[] { 0x6A, LowCpuDetour.SleepMilliseconds });
         LowCpuDetour.SleepMilliseconds.ShouldBe((byte)50);
     }
 
@@ -184,19 +225,20 @@ public sealed class LowCpuDetourTests
     {
         var code = Build();
 
-        code[83..86].ShouldBe(new byte[] { 0xC2, 0x14, 0x00 });
+        code[94..97].ShouldBe(new byte[] { 0xC2, 0x14, 0x00 });
     }
 
     [Fact]
-    public void PutsTheFourAddressesInTheSlotsThatCallThem()
+    public void PutsTheAddressesInTheSlotsThatCallThem()
     {
         var code = Build();
         var layout = Layout();
 
         Slot(code, layout.ForegroundWindowSlot).ShouldBe(Api.ForegroundWindow.Value);
         Slot(code, layout.SleepSlot).ShouldBe(Api.Sleep.Value);
-        Slot(code, layout.WindowSlot).ShouldBe(unchecked((uint)Window));
+        Slot(code, layout.ProcessIdSlot).ShouldBe(ProcessId);
         Slot(code, layout.AsyncKeyStateSlot).ShouldBe(Api.AsyncKeyState.Value);
+        Slot(code, layout.WindowThreadProcessIdSlot).ShouldBe(Api.WindowThreadProcessId.Value);
     }
 
     // Somebody else's detour. Taking the bytes for our own would send their calls into the

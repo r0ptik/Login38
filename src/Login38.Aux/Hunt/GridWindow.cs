@@ -149,7 +149,68 @@ internal sealed class GridWindow
         OriginX = originX;
         OriginY = originY;
 
-        return process.TryReadBytes(new GameAddress(cells), _cells) && Learn(process);
+        if (!process.TryReadBytes(new GameAddress(cells), _cells) || !Learn(process))
+        {
+            return false;
+        }
+
+        Fence();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Walls off the squares around anything that would send the character elsewhere.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A hunt is set going on a floor and belongs on that floor. Walking onto a cave mouth
+    /// takes the character to a map where nothing it had been doing means anything — a route
+    /// across ground it has left, an ignore list of monsters that are not there — and the way
+    /// back is a walk it has no idea how to make.
+    /// </para>
+    /// <para>
+    /// Written into the launcher's copy rather than the client's, like the crowding mark, so
+    /// the player's own walking is untouched: this refuses the hunt's routes and nothing else.
+    /// </para>
+    /// </remarks>
+    internal void Fence()
+    {
+        // Gathered before anything is written, because Close writes the same word this reads
+        // and a fenced square would otherwise be read as a teleport of its own.
+        List<(int X, int Y)>? mouths = null;
+
+        for (var cell = 0; cell < HuntAddresses.GridStride * HuntAddresses.GridRows; cell++)
+        {
+            if (!Attribute(cell, HuntAddresses.GridTeleport))
+            {
+                continue;
+            }
+
+            mouths ??= [];
+            mouths.Add((
+                (cell % HuntAddresses.GridStride) + OriginX,
+                (cell / HuntAddresses.GridStride) + OriginY));
+        }
+
+        if (mouths is null)
+        {
+            return;
+        }
+
+        foreach (var (x, y) in mouths)
+        {
+            // Two columns to a tile across, one row down.
+            for (var dy = -HuntAddresses.TeleportClearance; dy <= HuntAddresses.TeleportClearance; dy++)
+            {
+                for (var dx = -HuntAddresses.TeleportClearance * 2;
+                     dx <= HuntAddresses.TeleportClearance * 2;
+                     dx++)
+                {
+                    Close(x + dx, y + dy);
+                }
+            }
+        }
     }
 
     /// <summary>

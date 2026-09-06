@@ -77,6 +77,14 @@ public sealed class GameSession : IAsyncDisposable
         _aux = aux;
         _logger = logger;
         HuntingOffered = context.Aux.InternalBotEnabled;
+
+        // Told to the helper loop as well as to the window. The window's copy only decides
+        // which tab is drawn and what is written back; this is what the loop reads before it
+        // will touch the client at all.
+        if (HuntingOffered)
+        {
+            aux.Offer.Offer();
+        }
         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         Patching = Task.Run(() => PatchAsync(context, pipeline, _cancellation.Token), CancellationToken.None);

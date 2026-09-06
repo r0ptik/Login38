@@ -109,6 +109,7 @@ public static class LauncherServices
         // rather than shared, which is what the reference got wrong with two clients up.
         services.AddScoped<TargetScan>();
         services.AddScoped<HuntSwitch>();
+        services.AddScoped<HuntOffer>();
         services.AddScoped<SpellWatch>();
         services.AddScoped<ChaseHook>();
         services.AddScoped<ClickHook>();
@@ -135,7 +136,6 @@ public static class LauncherServices
         services.AddScoped<IAuxTask, StatusTask>();
         services.AddScoped<IAuxTask, ExperienceTask>();
         services.AddScoped<IAuxTask, MonsterColourTask>();
-        services.AddScoped<IAuxTask, PacketSpyTask>();
         services.AddScoped<IAuxTask, NotificationTask>();
         services.AddScoped<IAuxTask, OverlayTask>();
 

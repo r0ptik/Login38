@@ -1,4 +1,5 @@
 using Login38.Aux.Game;
+using Login38.Aux.Hunt;
 using Login38.Aux.Runtime;
 using Login38.Aux.Settings;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,6 +37,7 @@ public sealed class AuxSession : IDisposable
         Inventory = _scope.ServiceProvider.GetRequiredService<InventoryWatch>();
         Spells = _scope.ServiceProvider.GetRequiredService<SpellWatch>();
         Hunting = _scope.ServiceProvider.GetRequiredService<HuntSwitch>();
+        Offer = _scope.ServiceProvider.GetRequiredService<HuntOffer>();
         Timers = _scope.ServiceProvider.GetRequiredService<TimerTask>();
         Keys = _scope.ServiceProvider.GetRequiredService<HelperKeyTask>();
     }
@@ -66,6 +68,11 @@ public sealed class AuxSession : IDisposable
     /// How a task says it has turned the hunt off, for the window that draws the switch.
     /// </summary>
     public HuntSwitch Hunting { get; }
+
+    /// <summary>
+    /// Whether this game's server list offers hunting, for the loop rather than the window.
+    /// </summary>
+    public HuntOffer Offer { get; }
 
     /// <summary>
     /// The timers, so the window's per-row button can start one of them counting again.

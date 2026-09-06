@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.2.0
+
+The hunt no longer runs on servers that never offered it.
+
+### A client that had to be clicked once per step
+
+Players reported that walking and attacking stopped being continuous: the character took
+one step, or one swing, per press of the left mouse button. It happened on servers whose
+operator had ticked "開啟自動狩獵" in the encoder, and it happened whether or not the
+player had switched hunting on.
+
+The operator's switch was only ever enforced where the settings window writes its copy
+back, so it decided which tab was drawn and nothing else. The helper loop read the
+character's saved profile straight, so a profile holding the hunt switch on was hunted with
+regardless — and a hunt nobody had asked for was pinning the client's hover target and
+clearing its walk and attack flags underneath a player who was playing for themselves.
+
+The switch is now read by the loop before it will touch the client at all, and it defaults
+to off: a game whose offer was never read is a game the hunt leaves alone.
+
+### The hunt no longer clears flags it did not set
+
+Tearing the chain down wrote the client's walk and attack flags whether or not this hunt
+had armed anything, and it ran on every pass — five times a second while the hunt was
+switched off. The walk engine returns the moment its flag is clear, which is the same
+character taking one step per click. Only what the hunt actually armed is taken back out
+now.
+
+### Low-CPU throttling asked the wrong question
+
+It compared the foreground window against a handle. This client keeps more than one
+top-level window, so the handle found at install time is often not the one holding the
+focus, and the throttle then read a client being played as one sitting in the background.
+It asks which process owns the window in front instead, which is the question the rest of
+the launcher already asked.
+
+### Packet logging removed
+
+The diagnostic that recorded every packet the client sent is gone, along with its box in
+the helper window. It hooked the client's own network path, which is not something to ship
+to players for a tool only ever used to work out what one build sends.
+
 ## 1.1.0
 
 Automatic hunting, and the reason skills used to miss.

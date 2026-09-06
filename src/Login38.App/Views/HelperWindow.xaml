@@ -1061,12 +1061,6 @@
                                           IsChecked="{Binding GainDrift, Mode=TwoWay}" />
                             </StackPanel>
                         </lui:Section>
-
-                        <lui:Section Header="診斷"
-                                     Note="用來分析某個版本的客戶端送出什麼。它掛在客戶端自己的網路路徑上,每個封包寫一行,不適合長時間開著。">
-                            <CheckBox Content="記錄客戶端送出的所有封包"
-                                      IsChecked="{Binding LogSentPackets, Mode=TwoWay}" />
-                        </lui:Section>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

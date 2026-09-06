@@ -24,10 +24,48 @@ public partial class App : Application
 {
     private IHost? _host;
 
+    /// <summary>
+    /// Catches what the dispatcher cannot.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The dispatcher's handler only sees exceptions once there is a dispatcher pumping
+    /// them, which leaves the whole of startup uncovered: a theme dictionary that will not
+    /// load, a framework a machine does not have, a service that throws while the container
+    /// is building it. All of those end the process before a window exists, and what the
+    /// player sees is a double click that does nothing at all.
+    /// </para>
+    /// <para>
+    /// Subscribed from the constructor because that runs before <c>InitializeComponent</c>,
+    /// which is itself far enough into startup to fail. Nothing here can keep the process
+    /// alive — it is already ending — but it can say why on the way out, which is the whole
+    /// difference between a support case and a shrug.
+    /// </para>
+    /// </remarks>
+    public App() =>
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Complain(e.ExceptionObject as Exception);
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
+        try
+        {
+            Start();
+        }
+        catch (Exception failure)
+        {
+            // Deliberately everything. Whatever went wrong, a player looking at a window that
+            // never appeared is owed the reason, and there is nothing left to protect: the
+            // launcher has not started and is about to stop.
+            Complain(failure);
+            Shutdown();
+        }
+    }
+
+    private void Start()
+    {
         _host = Host.CreateApplicationBuilder()
             .ConfigureLauncher()
             .Build();
@@ -110,12 +148,36 @@ public partial class App : Application
     /// </remarks>
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        _host?.Services.GetService<ILogger<App>>()?.LogCritical(e.Exception, "Unhandled exception");
-
-        MessageBox.Show(
-            Explain(e.Exception), "Launcher error", MessageBoxButton.OK, MessageBoxImage.Error);
+        Complain(e.Exception);
 
         e.Handled = true;
+    }
+
+    /// <summary>Says what went wrong, on screen and in the log if there is one.</summary>
+    /// <remarks>
+    /// The log is off unless a support case has asked for it, so the message box is the only
+    /// thing most players will ever see. Its own failure is swallowed: this runs on the way
+    /// out of a process that is already going, and a second exception here would replace a
+    /// readable message with nothing.
+    /// </remarks>
+    private void Complain(Exception? failure)
+    {
+        if (failure is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _host?.Services.GetService<ILogger<App>>()?.LogCritical(failure, "Unhandled exception");
+
+            MessageBox.Show(
+                Explain(failure), "Launcher error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (Exception)
+        {
+            // Nothing left to try. The process is ending either way.
+        }
     }
 
     /// <summary>

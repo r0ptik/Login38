@@ -44,11 +44,8 @@ public sealed class LowCpuToggle : IGameToggle
     }
 
     /// <summary>What the hook needs to be able to take itself out again.</summary>
-    private sealed record Installed(LowCpuLayout Layout, GameAddress PeekMessage, byte[] Stolen, byte[] Jump)
-    {
-        /// <summary>The window handle the cave is currently comparing against.</summary>
-        public nint Window { get; set; }
-    }
+    private sealed record Installed(
+        LowCpuLayout Layout, GameAddress PeekMessage, byte[] Stolen, byte[] Jump);
 
     /// <inheritdoc/>
     public bool Apply(RemoteProcess process, bool wanted)
@@ -66,10 +63,13 @@ public sealed class LowCpuToggle : IGameToggle
                 _installed = null;
             }
 
+            // Nothing to do for a hook that is already in: what it compares against is the
+            // game's process id, which is fixed for the life of the game. The window handle
+            // it used to hold was not, and keeping that one current was a whole method.
             var result = (wanted, _installed) switch
             {
                 (true, null) => Install(process),
-                (true, { } installed) => Follow(process, installed),
+                (true, not null) => true,
                 (false, { } installed) => Remove(process, installed),
                 (false, null) => true,
             };
@@ -90,9 +90,6 @@ public sealed class LowCpuToggle : IGameToggle
     private bool Install(RemoteProcess process)
     {
         var api = LowCpuApi.Resolve(process);
-        var window = GameWindow.Find(process.Id)?.Handle
-                     ?? throw new GameProcessException("the game has no window yet.");
-
         var stolen = process.ReadBytes(api.PeekMessage, LowCpuDetour.StolenLength);
 
         // Somebody else's detour. Writing over it would take out their trampoline, and
@@ -111,7 +108,7 @@ public sealed class LowCpuToggle : IGameToggle
         _cave ??= process.AllocateExecutable(size);
         var layout = LowCpuDetour.LayoutFor(_cave.Value, stolen.Length);
 
-        process.WriteCode(_cave.Value, LowCpuDetour.Build(_cave.Value, api, window, stolen));
+        process.WriteCode(_cave.Value, LowCpuDetour.Build(_cave.Value, api, process.Id, stolen));
 
         var jump = new ShellcodeBuilder(api.PeekMessage).JumpTo(_cave.Value).Build();
 
@@ -119,36 +116,11 @@ public sealed class LowCpuToggle : IGameToggle
         // anything is sent to it, and this write is what starts sending.
         process.WriteCode(api.PeekMessage, jump);
 
-        _installed = new Installed(layout, api.PeekMessage, stolen, jump) { Window = window };
+        _installed = new Installed(layout, api.PeekMessage, stolen, jump);
 
         _logger.LogInformation(
             "{Toggle} switched on; PeekMessageA at {Peek} now goes through {Cave}",
             Name, api.PeekMessage, _cave.Value);
-
-        return true;
-    }
-
-    /// <summary>
-    /// Keeps the installed hook pointed at the window the player is actually looking at.
-    /// </summary>
-    /// <remarks>
-    /// The client destroys and recreates its window when the display mode changes. A stale
-    /// handle never matches whatever is in front, so the hook would throttle a client the
-    /// player is playing — which reads as the game becoming unplayably slow for no reason.
-    /// </remarks>
-    private bool Follow(RemoteProcess process, Installed installed)
-    {
-        var window = GameWindow.Find(process.Id)?.Handle;
-
-        if (window is null || window == installed.Window)
-        {
-            return true;
-        }
-
-        process.WriteBytes(installed.Layout.WindowSlot, BitConverter.GetBytes(unchecked((uint)window.Value)));
-        installed.Window = window.Value;
-
-        _logger.LogInformation("{Toggle}: the game's window changed; following it", Name);
 
         return true;
     }

@@ -48,6 +48,10 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
     /// standing still for a second after every step its target took actually was.
     /// </para>
     /// </remarks>
+    /// <summary>How far a target may move in one pass and still have walked there.</summary>
+    /// <remarks>In tiles, and the grid is two columns to one of them across.</remarks>
+    private const int Blink = 3;
+
     private static readonly TimeSpan Quiet = TimeSpan.FromSeconds(1);
 
     /// <summary>
@@ -201,6 +205,7 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
     private readonly AttackChain _chain;
     private readonly SkillVolley _volley;
     private readonly CastWatch _watch;
+    private readonly HuntOffer _offer;
     private readonly ILogger<HuntTask> _logger;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly StallWatch _stall = new();
@@ -286,6 +291,14 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
     private TimeSpan _legSince;
 
     private HuntTarget? _target;
+
+    /// <summary>Whether the client is holding something this hunt put there.</summary>
+    /// <remarks>
+    /// What tells a teardown worth doing from one that wipes the player's own state. See
+    /// <see cref="Release"/>.
+    /// </remarks>
+    private bool _armed;
+
     private uint _lastHitPoints;
     private TimeSpan? _heldSince;
     private bool _doubted;
@@ -303,6 +316,7 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
         AttackChain chain,
         SkillVolley volley,
         CastWatch watch,
+        HuntOffer offer,
         ILogger<HuntTask> logger)
     {
         _scan = scan;
@@ -312,6 +326,7 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
         _chain = chain;
         _volley = volley;
         _watch = watch;
+        _offer = offer;
         _logger = logger;
     }
 
@@ -335,6 +350,18 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
     public void Tick(AuxContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
+
+        // Before anything, including remembering the process, so that Stopping has nothing
+        // to write either. A build whose operator has not offered hunting must not have its
+        // client touched at all, and this switch used to be enforced only where the settings
+        // window writes its copy back — which decided what was drawn and nothing else. The
+        // loop went on reading whatever the character's profile held, so a profile with the
+        // hunt switch on was hunted with on a server that had never offered it, and the
+        // player got a launcher steering their character.
+        if (!_offer.IsOffered)
+        {
+            return;
+        }
 
         _process = context.Process;
         var settings = context.Settings.Hunt;
@@ -369,6 +396,16 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
         }
 
         Forget();
+
+        // Before anything is decided, because a floor change rebuilds the world. The ids in
+        // the ignore list belong to monsters that are not here, the route in hand is a path
+        // across the map that was left, and the collision window is a different window —
+        // so a character that walked into a cave mouth carried on walking legs that meant
+        // nothing where it had arrived, which is what standing at a teleport looked like.
+        if (Arrived(context.Process, context.Player.MapId))
+        {
+            return;
+        }
 
         // Every pass, and before anything decides what to do with a turn: the server's answer
         // to a cast arrives when it arrives, and a pass that returns early below is still a
@@ -525,7 +562,45 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
         // turning into a change of target — was reading coordinates from before the walk,
         // so a monster the character had spent five seconds closing on still measured
         // twenty tiles away and the guard never fired.
+        var blinked = Blinked(target, now);
+
         _target = now;
+
+        // A monster that was put somewhere rather than one that walked. Everything measured
+        // so far — the route, how long the character has stood still, how long the thing has
+        // gone without losing a point — was measured about a fight that is no longer where it
+        // was, and carrying those numbers across is what made a blink cost several seconds:
+        // the stall watch, already part way through its count, would time out almost at once
+        // and rest the monster for the whole ignore period.
+        if (blinked)
+        {
+            // Asked now rather than after the stall watch has spent its seconds noticing that
+            // the character is standing still. Either there is a way to where it went, and the
+            // walk starts this pass, or there is not and something else is worth doing.
+            if (!Reaches(process, settings, player, now, _swing))
+            {
+                _logger.LogInformation(
+                    "{Name} moved to ({X},{Y}), which there is no way to from ({PX},{PY}); "
+                    + "letting it go", target.Name, now.X, now.Y, player.X, player.Y);
+
+                // Not rested. It refused nothing and did nothing wrong — it was moved — and
+                // the pass after this one may well find it somewhere reachable. Resting it
+                // here is how a blink turned into the ignore period as well as the stall.
+                Release(process);
+
+                return false;
+            }
+
+            _logger.LogDebug(
+                "{Name} moved from ({WasX},{WasY}) to ({X},{Y}) in one pass; planning again",
+                target.Name, target.X, target.Y, now.X, now.Y);
+
+            Wander();
+            _stall.Reset();
+            _rooted.Reset();
+            _health.Reset();
+            _stoodSince = _clock.Elapsed;
+        }
 
         // Nothing is expected to be happening until the character is close enough to swing
         // and the client has actually locked on, so the clock starts on arrival rather than
@@ -758,7 +833,16 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
             // character: g_auto_attack still set and g_attack_target still pointing at a
             // corpse, because this path used to return without touching either. The client
             // reads that as a chain in progress and its own halves wait on each other.
-            _chain.Stop(process);
+            //
+            // Only what this hunt armed, though. A barren pass is every pass while there is
+            // nothing on the map, and cutting a chain nobody started means writing the
+            // client's walk and attack flags five times a second underneath a player who is
+            // walking and swinging for themselves.
+            if (_armed)
+            {
+                _chain.Stop(process);
+                _armed = false;
+            }
 
             return;
         }
@@ -916,6 +1000,67 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
     /// How far apart two things are, in tiles rather than in grid cells.
     /// </summary>
     /// <remarks>Two columns make a tile across and one row makes one down.</remarks>
+    /// <summary>
+    /// Notices a floor change and throws away everything that was about the last one.
+    /// </summary>
+    /// <returns>Whether this pass belongs to a map the hunt has not looked at yet.</returns>
+    /// <remarks>
+    /// <para>
+    /// One pass is given up on purpose. Every reading already taken this pass — where the
+    /// character is standing, what is on the map, what it was fighting — was taken against a
+    /// map it has left, and there is nothing to be gained by acting on any of it a fifth of a
+    /// second earlier than the next pass would.
+    /// </para>
+    /// <para>
+    /// A zero is not a map. The client reads that between leaving one and arriving at the
+    /// next, and treating it as a floor of its own would throw the hunt away twice for one
+    /// journey.
+    /// </para>
+    /// </remarks>
+    private bool Arrived(RemoteProcess process, uint map)
+    {
+        if (map == 0 || _map == map)
+        {
+            return false;
+        }
+
+        var was = _map;
+
+        _map = map;
+
+        // Nothing to throw away on the first sight of a character.
+        if (was is null)
+        {
+            return false;
+        }
+
+        _logger.LogInformation(
+            "the character has gone from map {Was} to map {Now}; the hunt starts again there",
+            was, map);
+
+        Release(process);
+        Wander();
+
+        _ignored.Clear();
+        _left = null;
+        _frozen.Reset();
+        _volley.Reset();
+        _watch.Reset();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a target was moved rather than having walked.
+    /// </summary>
+    /// <remarks>
+    /// Measured in tiles between two passes a fifth of a second apart, over which nothing on
+    /// the map covers more than one square. Three is generous enough that a fast monster on a
+    /// pass the launcher was late for still reads as walking, and far short of any blink.
+    /// </remarks>
+    internal static bool Blinked(HuntTarget was, HuntTarget now) =>
+        Math.Abs(now.X - was.X) > Blink * 2 || Math.Abs(now.Y - was.Y) > Blink;
+
     private static int Tiles(HuntTarget target, (int X, int Y) player) =>
         Math.Max(Math.Abs(target.X - player.X) / 2, Math.Abs(target.Y - player.Y));
 
@@ -1561,6 +1706,9 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
     /// <summary>What was let go of last, and when. <see cref="Culprit"/> reads it.</summary>
     private (uint Id, TimeSpan When)? _left;
 
+    /// <summary>Which floor the hunt last looked at, so a change of them can be noticed.</summary>
+    private uint? _map;
+
     /// <summary>The skill range the standoff was last cut to, so it is said once.</summary>
     private int? _closest;
 
@@ -1643,6 +1791,10 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
             return false;
         }
 
+        // From here the client is holding something this hunt put there, which is the only
+        // thing Release is entitled to take back out.
+        _armed = true;
+
         // The chain only when the rotation asks for the weapon. Without it the client neither
         // chases nor swings, and the walking is the route walker's — see _swings.
         if (_swings && !_chain.Engage(process, target))
@@ -1700,8 +1852,18 @@ public sealed class HuntTask : IAuxTask, IAuxTaskShutdown
             _left = (leaving.Id, _clock.Elapsed);
         }
 
-        _chase.Aim(process, 0);
-        _chain.Stop(process);
+        // Only what this hunt armed. Both of these write the client's own flags, and
+        // Release runs on every pass the hunt is switched off — so doing it unconditionally
+        // cleared WalkTargetValid and AttackTarget five times a second underneath a player
+        // who was playing for themselves. The walk engine returns the moment that flag is
+        // clear, which reads as a character that takes one step per click and then stops.
+        if (_armed)
+        {
+            _chase.Aim(process, 0);
+            _chain.Stop(process);
+            _armed = false;
+        }
+
         _target = null;
         _stall.Reset();
         _rooted.Reset();

@@ -9,6 +9,7 @@ namespace Login38.Aux.Toggles;
 /// <param name="ForegroundWindow"><c>user32!GetForegroundWindow</c>.</param>
 /// <param name="AsyncKeyState"><c>user32!GetAsyncKeyState</c>.</param>
 /// <param name="Sleep"><c>kernel32!Sleep</c>.</param>
+/// <param name="WindowThreadProcessId"><c>user32!GetWindowThreadProcessId</c>.</param>
 /// <remarks>
 /// The reference resolved all four in the launcher with <c>GetProcAddress</c> and wrote
 /// those addresses into the game. System DLLs do share a base across processes within a
@@ -20,7 +21,8 @@ internal sealed record LowCpuApi(
     GameAddress PeekMessage,
     GameAddress ForegroundWindow,
     GameAddress AsyncKeyState,
-    GameAddress Sleep)
+    GameAddress Sleep,
+    GameAddress WindowThreadProcessId)
 {
     private const string UserModule = "user32.dll";
 
@@ -36,7 +38,8 @@ internal sealed record LowCpuApi(
             Export(process, user, UserModule, "PeekMessageA"),
             Export(process, user, UserModule, "GetForegroundWindow"),
             Export(process, user, UserModule, "GetAsyncKeyState"),
-            Export(process, kernel, KernelModule, "Sleep"));
+            Export(process, kernel, KernelModule, "Sleep"),
+            Export(process, user, UserModule, "GetWindowThreadProcessId"));
     }
 
     private static GameAddress Module(RemoteProcess process, string name) =>
@@ -70,20 +73,38 @@ internal readonly record struct LowCpuLayout(GameAddress Cave, int DetourLength,
     public GameAddress SleepSlot => Slots + 4;
 
     /// <summary>
-    /// The game's window, compared against whatever is in front.
+    /// The game's own process id, compared against whoever owns the window in front.
     /// </summary>
     /// <remarks>
-    /// A slot rather than an immediate because the client destroys and recreates its
-    /// window when the display mode changes, and a stale handle would mean throttling a
-    /// client the player is looking at.
+    /// <para>
+    /// A process rather than a window, and that is the whole of a defect players reported
+    /// as the client no longer moving or attacking continuously. This client keeps more
+    /// than one top-level window, so the handle the launcher found is often not the one
+    /// holding the focus — see <c>GameWindow.IsForeground</c>, which asks the same question
+    /// by process for the same reason. Comparing handles read a client the player was
+    /// actively playing as one sitting in the background.
+    /// </para>
+    /// <para>
+    /// Which mattered because of what came next: nothing about clicking the ground to walk
+    /// or a monster to attack holds a key down, so the throttle engaged in the gap between
+    /// every click. The client woke for the click, took one step or one swing, and slept
+    /// again — a game that had to be clicked once per action.
+    /// </para>
+    /// <para>
+    /// The process id also cannot go stale, so unlike the handle it was replaced with there
+    /// is nothing to keep following as the client recreates its window.
+    /// </para>
     /// </remarks>
-    public GameAddress WindowSlot => Slots + 8;
+    public GameAddress ProcessIdSlot => Slots + 8;
 
     /// <summary><c>user32!GetAsyncKeyState</c>.</summary>
     public GameAddress AsyncKeyStateSlot => Slots + 12;
 
+    /// <summary><c>user32!GetWindowThreadProcessId</c>.</summary>
+    public GameAddress WindowThreadProcessIdSlot => Slots + 16;
+
     /// <summary>How much to allocate.</summary>
-    public int Size => (int)(AsyncKeyStateSlot.Value - Cave.Value) + 4;
+    public int Size => (int)(WindowThreadProcessIdSlot.Value - Cave.Value) + 4;
 }
 
 /// <summary>
@@ -98,9 +119,10 @@ internal readonly record struct LowCpuLayout(GameAddress Cave, int DetourLength,
 /// </para>
 /// <para>
 /// So this stands in front of <c>PeekMessageA</c> and sleeps 50 ms when, and only when,
-/// all three of these hold: the call found no message, the game is not the foreground
-/// window, and no key is being held. Sleeping on a call that found a message would let
-/// input pile up; sleeping while the game is in front would make it feel broken.
+/// all three of these hold: the call found no message, the window in front belongs to
+/// another process, and no key is being held. Sleeping on a call that found a message
+/// would let input pile up; sleeping while the player is looking at the game would make
+/// it feel broken, and did — see <see cref="LowCpuLayout.ProcessIdSlot"/>.
 /// </para>
 /// <para>
 /// It hooks <c>user32</c> in the game rather than the game's import table on purpose. The
@@ -153,7 +175,7 @@ internal static class LowCpuDetour
 
     /// <summary>Builds the whole cave: detour, trampoline, then the four slots.</summary>
     internal static byte[] Build(
-        GameAddress cave, LowCpuApi api, nint window, ReadOnlySpan<byte> prologue)
+        GameAddress cave, LowCpuApi api, uint processId, ReadOnlySpan<byte> prologue)
     {
         var layout = LayoutFor(cave, prologue.Length);
         var code = new List<byte>(layout.Size);
@@ -170,8 +192,9 @@ internal static class LowCpuDetour
 
         code.AddRange(Slot(api.ForegroundWindow.Value));
         code.AddRange(Slot(api.Sleep.Value));
-        code.AddRange(Slot(unchecked((uint)window)));
+        code.AddRange(Slot(processId));
         code.AddRange(Slot(api.AsyncKeyState.Value));
+        code.AddRange(Slot(api.WindowThreadProcessId.Value));
 
         return [.. code];
     }
@@ -197,9 +220,20 @@ internal static class LowCpuDetour
         code.TestEaxEax();
         var hasMessage = code.ShortJumpIfNotZero();
 
-        // Somebody looking at the window is somebody playing.
+        // Somebody looking at the game is somebody playing — asked by process rather than
+        // by handle, because the client keeps more than one top-level window and which of
+        // them holds the focus is its own business.
+        //
+        // The out parameter is a slot of the stack rather than of the cave, so two threads
+        // inside PeekMessageA at once cannot overwrite each other's answer. The zero pushed
+        // first is what stays there if the call fails, and no process is process zero.
         code.CallIndirect(layout.ForegroundWindowSlot);
-        code.CmpEaxPtr(layout.WindowSlot);
+        code.PushImm8(0);
+        code.PushEsp();
+        code.PushEax();
+        code.CallIndirect(layout.WindowThreadProcessIdSlot);
+        code.PopEax();
+        code.CmpEaxPtr(layout.ProcessIdSlot);
         var inFront = code.ShortJumpIfZero();
 
         // A held key means the client is being driven, whether or not it is in front — the

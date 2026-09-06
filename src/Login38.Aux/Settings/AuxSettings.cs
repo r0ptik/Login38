@@ -99,16 +99,6 @@ public sealed class MiscToggles
     [JsonPropertyName("damage_at_feet")]
     public bool DamageAtFeet { get; set; }
 
-    /// <summary>
-    /// Write every packet the client sends to the log.
-    /// </summary>
-    /// <remarks>
-    /// A tool for working out what a client version sends, not something to leave on: it
-    /// records inside the client's own network path and writes a line per packet.
-    /// </remarks>
-    [JsonPropertyName("log_sent_packets")]
-    public bool LogSentPackets { get; set; }
-
     /// <summary>Name what goes into the bag, in the bottom-left corner.</summary>
     [JsonPropertyName("pickup_toast")]
     public bool PickupToast { get; set; }
